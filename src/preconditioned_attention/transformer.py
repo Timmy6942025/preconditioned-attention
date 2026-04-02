@@ -5,6 +5,7 @@ from torch import Tensor
 from preconditioned_attention.attention import (
     MultiHeadAttention,
     MultiHeadPreconditionedAttention,
+    MultiHeadSigmaReparamAttention,
 )
 
 
@@ -16,9 +17,16 @@ class TransformerLayer(nn.Module):
         d_ff: int,
         dropout: float = 0.1,
         use_preconditioned: bool = False,
+        use_sigma_reparam: bool = False,
     ):
         super().__init__()
-        AttnClass = MultiHeadPreconditionedAttention if use_preconditioned else MultiHeadAttention
+        if use_sigma_reparam:
+            AttnClass = MultiHeadSigmaReparamAttention
+        elif use_preconditioned:
+            AttnClass = MultiHeadPreconditionedAttention
+        else:
+            AttnClass = MultiHeadAttention
+
         self.self_attn = AttnClass(d_model=d_model, n_heads=n_heads, dropout=dropout)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ff),
@@ -29,7 +37,6 @@ class TransformerLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
-        self.use_preconditioned = use_preconditioned
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
         attn_out, attn_weights = self.self_attn(x, x, x, mask)
@@ -50,16 +57,21 @@ class TinyTransformer(nn.Module):
         dropout: float = 0.1,
         max_seq_len: int = 64,
         use_preconditioned: bool = False,
+        use_sigma_reparam: bool = False,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_embedding = nn.Parameter(torch.randn(1, max_seq_len, d_model) * 0.02)
         self.layers = nn.ModuleList(
-            [TransformerLayer(d_model, n_heads, d_ff, dropout, use_preconditioned) for _ in range(n_layers)]
+            [
+                TransformerLayer(d_model, n_heads, d_ff, dropout, use_preconditioned, use_sigma_reparam)
+                for _ in range(n_layers)
+            ]
         )
         self.norm = nn.LayerNorm(d_model)
         self.output_proj = nn.Linear(d_model, vocab_size)
         self.use_preconditioned = use_preconditioned
+        self.use_sigma_reparam = use_sigma_reparam
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> tuple[Tensor, list[Tensor]]:
         B, N = x.shape

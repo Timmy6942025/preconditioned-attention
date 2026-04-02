@@ -97,6 +97,8 @@ def run_training(
     torch.manual_seed(seed)
 
     use_preconditioned = variant == "preconditioned"
+    use_sigma_reparam = variant == "sigma_reparam"
+
     print(f"\n{'=' * 60}")
     print(f"Training {variant.upper()} transformer on {task} task")
     print(f"{'=' * 60}")
@@ -120,6 +122,7 @@ def run_training(
         dropout=0.1,
         max_seq_len=64,
         use_preconditioned=use_preconditioned,
+        use_sigma_reparam=use_sigma_reparam,
     )
     print(f"Model parameters: {model.count_parameters():,}")
 
@@ -161,7 +164,9 @@ def run_training(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train transformer with optional preconditioned attention")
-    parser.add_argument("--variant", type=str, default="baseline", choices=["baseline", "preconditioned"])
+    parser.add_argument(
+        "--variant", type=str, default="baseline", choices=["baseline", "preconditioned", "sigma_reparam"]
+    )
     parser.add_argument("--task", type=str, default="copy", choices=["copy", "reverse"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)

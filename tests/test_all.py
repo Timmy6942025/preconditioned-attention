@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -6,8 +5,10 @@ from torch.utils.data import DataLoader
 from preconditioned_attention.attention import (
     MultiHeadAttention,
     MultiHeadPreconditionedAttention,
+    MultiHeadSigmaReparamAttention,
     PreconditionedAttention,
     ScaledDotProductAttention,
+    SigmaReparamLinear,
 )
 from preconditioned_attention.data import CopyTaskDataset, ReverseTaskDataset, create_dataloaders
 from preconditioned_attention.monitoring import ConditionNumberMonitor, StableRank
@@ -148,10 +149,12 @@ class TestTransformerLayer:
         assert out.shape == (2, 16, 64)
 
     def test_preconditioned_toggle(self):
-        layer_std = TransformerLayer(d_model=64, n_heads=4, d_ff=128, use_preconditioned=False)
+        layer_std = TransformerLayer(d_model=64, n_heads=4, d_ff=128)
         layer_pre = TransformerLayer(d_model=64, n_heads=4, d_ff=128, use_preconditioned=True)
-        assert not layer_std.use_preconditioned
-        assert layer_pre.use_preconditioned
+        layer_sr = TransformerLayer(d_model=64, n_heads=4, d_ff=128, use_sigma_reparam=True)
+        assert isinstance(layer_std.self_attn, MultiHeadAttention)
+        assert isinstance(layer_pre.self_attn, MultiHeadPreconditionedAttention)
+        assert isinstance(layer_sr.self_attn, MultiHeadSigmaReparamAttention)
 
 
 class TestTinyTransformer:
@@ -315,3 +318,74 @@ class TestIntegration:
         assert cond_pre < cond_std, (
             f"Preconditioned condition number ({cond_pre:.2f}) not lower than standard ({cond_std:.2f})"
         )
+
+
+class TestSigmaReparamLinear:
+    def test_output_shape(self):
+        lin = SigmaReparamLinear(64, 128)
+        x = torch.randn(4, 64)
+        out = lin(x)
+        assert out.shape == (4, 128)
+
+    def test_gradient_flow(self):
+        lin = SigmaReparamLinear(64, 128)
+        x = torch.randn(4, 64, requires_grad=True)
+        out = lin(x)
+        out.sum().backward()
+        assert x.grad is not None
+        for name, p in lin.named_parameters():
+            assert p.grad is not None, f"No gradient for {name}"
+
+    def test_sigma_parameter_exists(self):
+        lin = SigmaReparamLinear(64, 128)
+        assert hasattr(lin, "sigma")
+        assert lin.sigma.shape == (1,)
+
+
+class TestMultiHeadSigmaReparamAttention:
+    def test_output_shape(self):
+        m = MultiHeadSigmaReparamAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 16, 64)
+        out, attn = m(x, x, x)
+        assert out.shape == (2, 16, 64)
+        assert attn.shape == (2, 4, 16, 16)
+
+    def test_gradient_flow(self):
+        m = MultiHeadSigmaReparamAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out, _ = m(x, x, x)
+        out.sum().backward()
+        for name, p in m.named_parameters():
+            assert p.grad is not None, f"No gradient for {name}"
+
+
+class TestTinyTransformerSigmaReparam:
+    def test_forward_shape(self):
+        model = TinyTransformer(vocab_size=64, d_model=64, n_heads=4, n_layers=2, use_sigma_reparam=True)
+        tokens = torch.randint(0, 64, (2, 16))
+        logits, attn_list = model(tokens)
+        assert logits.shape == (2, 16, 64)
+        assert len(attn_list) == 2
+
+    def test_sigma_reparam_training_converges(self):
+        torch.manual_seed(42)
+        ds = CopyTaskDataset(vocab_size=64, seq_len=32, num_samples=100)
+        loader = DataLoader(ds, batch_size=16, shuffle=True)
+        model = TinyTransformer(vocab_size=64, d_model=64, n_heads=4, n_layers=2, d_ff=64, use_sigma_reparam=True)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        criterion = nn.CrossEntropyLoss()
+
+        losses = []
+        for _epoch in range(5):
+            model.train()
+            total = 0.0
+            for bx, by in loader:
+                optimizer.zero_grad()
+                logits, _ = model(bx)
+                loss = criterion(logits.view(-1, 64), by.view(-1))
+                loss.backward()
+                optimizer.step()
+                total += loss.item()
+            losses.append(total / len(loader))
+
+        assert losses[-1] < losses[0], f"Loss did not decrease: {losses[0]:.4f} -> {losses[-1]:.4f}"

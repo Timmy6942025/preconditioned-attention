@@ -1,13 +1,16 @@
 """Preconditioned Attention for Transformers (arXiv:2603.27153).
 
 Applies diagonal preconditioner C to attention output where C_ii = 1/||row_i||_2.
+Also includes sigmaReparam (Apple, ICML 2023) as an alternative approach.
 """
 
 from preconditioned_attention.attention import (
     MultiHeadAttention,
     MultiHeadPreconditionedAttention,
+    MultiHeadSigmaReparamAttention,
     PreconditionedAttention,
     ScaledDotProductAttention,
+    SigmaReparamLinear,
 )
 from preconditioned_attention.data import CopyTaskDataset, ReverseTaskDataset, create_dataloaders
 from preconditioned_attention.monitoring import ConditionNumberMonitor, StableRank
@@ -20,6 +23,8 @@ __all__ = [
     "MultiHeadAttention",
     "PreconditionedAttention",
     "MultiHeadPreconditionedAttention",
+    "SigmaReparamLinear",
+    "MultiHeadSigmaReparamAttention",
     "TransformerLayer",
     "TinyTransformer",
     "ConditionNumberMonitor",
